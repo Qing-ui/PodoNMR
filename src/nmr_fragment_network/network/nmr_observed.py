@@ -55,10 +55,10 @@ def plot_nmr_sample_network(
         if source in graph and target in graph:
             graph.add_edge(source, target, **item)
     if out_svg is not None:
-        _draw_graph(graph, out_svg, size_column="final_score", color_by="quality")
+        _draw_graph(graph, out_svg)
         outputs["svg"] = Path(out_svg)
     if out_png is not None:
-        _draw_graph(graph, out_png, size_column="final_score", color_by="quality")
+        _draw_graph(graph, out_png)
         outputs["png"] = Path(out_png)
     return outputs
 
@@ -77,15 +77,6 @@ def _network_scores(prior_scores: dict[str, float], edges: pd.DataFrame, network
         if target in scores and source in prior_scores:
             scores[target] += prior_scores[source] * edge * network_weight
     return scores
-
-
-def _attach_group_quality(result: pd.DataFrame, curated: Path) -> pd.DataFrame:
-    audit_path = curated / "fragment_group_node_quality_audit.csv"
-    if not audit_path.exists() or result.empty:
-        return result
-    audit = pd.read_csv(audit_path)
-    columns = ["group_id", "group_members", "quality_flags", "dominant_skeleton", "strongest_partners", "example_compounds"]
-    return result.merge(audit[[column for column in columns if column in audit.columns]], on="group_id", how="left")
 
 
 def _attach_class_similarity_support(classes: pd.DataFrame, similar: pd.DataFrame) -> pd.DataFrame:

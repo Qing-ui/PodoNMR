@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from base64 import b64encode
 import sys
 import json
 from tempfile import TemporaryDirectory
@@ -30,7 +31,23 @@ DISPLAY_SETTINGS = DATA / "display_settings.json"
 REQUIRED_COLUMNS = {"carbon_id", "delta_C", "delta_H", "C_type"}
 NODE_COUNT = 10
 REFERENCE_COUNT = 10
-CLASS_COUNT = 5
+CLASS_COUNT = 8
+MOTIF_COLUMNS = ["official_model_rank", "fragment_no", "fragment_name_en", "role",
+                 "group_probability", "predicted_at_0_5"]
+TABLE_LABELS = {
+    "class_rank": "Rank",
+    "skeleton_type": "Scaffold",
+    "class_score": "Scaffold score",
+    "official_model_rank": "Rank",
+    "fragment_no": "Motif ID",
+    "fragment_name_en": "Structural motif",
+    "role": "Scale",
+    "group_probability": "Motif score",
+    "predicted_at_0_5": "Score ≥ 0.50",
+    "compound_id": "Reference ID",
+    "nmr_similarity": "NMR similarity",
+    "nmr_distance": "NMR distance",
+}
 SKELETON_LABELS = {
     "贝壳杉/扁枝杉烷型": "Kaurane/phyllocladane",
     "松香烷型": "Abietane",
@@ -53,8 +70,6 @@ st.markdown(
     section[data-testid="stSidebar"] {background: #f6f8fb; border-right: 1px solid #dfe6ee;}
     h1 {font-size: 2.05rem; margin-bottom: .2rem; color: #17202a;}
     h2, h3 {letter-spacing: 0;}
-    .eyebrow {color: #4c6a75; font-size: .76rem; letter-spacing: .08em; text-transform: uppercase; font-weight: 700;}
-    .lead {color: #3a4655; font-size: 1rem; line-height: 1.55; margin-bottom: 1.1rem; max-width: 980px;}
     .callout {
         border: 1px solid #cfdce5;
         border-left: 5px solid #2b6f73;
@@ -71,7 +86,6 @@ st.markdown(
         padding: 12px 14px;
     }
     div[data-testid="stMetricValue"] {font-size: 1.42rem;}
-    .small {font-size: .84rem; color: #64748b;}
     .stButton > button {
         width: 100%;
         border-radius: 6px;
@@ -92,11 +106,10 @@ st.markdown(
 
 
 def sample_id(data: pd.DataFrame) -> str:
-    for column in ("sample_id", "compound_id"):
-        if column in data.columns and not data[column].dropna().empty:
-            value = str(data[column].dropna().iloc[0]).strip()
-            if value:
-                return value
+    if "sample_id" in data.columns and not data["sample_id"].dropna().empty:
+        value = str(data["sample_id"].dropna().iloc[0]).strip()
+        if value:
+            return value
     return "unknown"
 
 
@@ -110,15 +123,16 @@ def english_display(frame: pd.DataFrame) -> pd.DataFrame:
     for column in ("skeleton_type", "dominant_skeleton", "best_skeleton"):
         if column in data.columns:
             data[column] = data[column].map(english_skeleton)
+    if {"name", "fragment_name_en"} <= set(data.columns):
+        data["name"] = data["fragment_name_en"]
     return data
 
 
 def load_input(source: str, upload) -> pd.DataFrame:
-    if source == "example":
-        return pd.read_csv(EXAMPLE)
-    if upload is None:
+    selected = EXAMPLE if source == "example" else upload
+    if selected is None:
         return pd.DataFrame()
-    return pd.read_csv(upload)
+    return pd.read_csv(selected, dtype={"carbon_id": "string", "sample_id": "string"})
 
 
 def save_input(data: pd.DataFrame, run_dir: Path) -> Path:
@@ -133,6 +147,7 @@ def run_analysis(data: pd.DataFrame, node_count: int, compound_count: int, class
     input_path = save_input(data, run_dir)
     paths = {
         "groups": run_dir / "group_recommendations.csv",
+        "motif_scores": run_dir / "motif_scores.csv",
         "similar": run_dir / "similar_compounds.csv",
         "classes": run_dir / "class_recommendations.csv",
         "network_nodes": run_dir / "network_nodes.csv",
@@ -144,21 +159,18 @@ def run_analysis(data: pd.DataFrame, node_count: int, compound_count: int, class
         input_path,
         DATA,
         MODEL,
-        out_groups=paths["groups"],
-        out_similar=paths["similar"],
-        out_classes=paths["classes"],
-        out_network_nodes=paths["network_nodes"],
-        out_network_edges=paths["network_edges"],
         out_network_svg=paths["network_svg"],
         out_network_png=paths["network_png"],
         top_groups=node_count,
         top_compounds=compound_count,
         top_classes=class_count,
     )
+    for key in ("groups", "motif_scores", "similar", "classes", "network_nodes", "network_edges"):
+        english_display(result[key]).to_csv(paths[key], index=False, encoding="utf-8-sig")
     return {"result": result, "paths": paths, "run_dir": run_dir, "temp_dir": temp_dir, "input": data.copy()}
 
 
-def self_excluded_reference(similar: pd.DataFrame) -> pd.DataFrame:
+def distinct_descriptor_references(similar: pd.DataFrame) -> pd.DataFrame:
     if similar.empty or "nmr_similarity" not in similar.columns:
         return similar
     values = pd.to_numeric(similar["nmr_similarity"], errors="coerce").fillna(0.0)
@@ -180,7 +192,7 @@ def write_run_report(
     best_compound: str,
     best_similarity: float,
     nearest_reference: str,
-    nearest_reference_similarity: float,
+    nearest_reference_similarity: float | None,
     domain_status: str,
     thresholds: dict[str, float],
 ) -> dict[str, Path]:
@@ -188,10 +200,12 @@ def write_run_report(
         {"item": "top_class", "value": top_class},
         {"item": "best_compound", "value": best_compound},
         {"item": "best_similarity", "value": round(best_similarity, 6)},
-        {"item": "unknown_mode_reference", "value": nearest_reference},
-        {"item": "unknown_mode_reference_similarity", "value": round(nearest_reference_similarity, 6)},
+        {"item": "nearest_distinct_descriptor_reference", "value": nearest_reference},
+        {"item": "nearest_distinct_descriptor_similarity", "value": (
+            round(nearest_reference_similarity, 6) if nearest_reference_similarity is not None else ""
+        )},
         {"item": "reference_domain", "value": domain_status},
-        {"item": "fragment_groups", "value": len(result["groups"])},
+        {"item": "motifs_at_or_above_0_50", "value": int(result["motif_scores"]["predicted_at_0_5"].sum())},
         {"item": "network_edges", "value": len(result["network_edges"])},
         {"item": "class_candidates", "value": len(result["classes"])},
         {"item": "similar_compounds", "value": len(result["similar"])},
@@ -203,18 +217,19 @@ def write_run_report(
     summary_path = run_dir / "analysis_summary.csv"
     report_path = run_dir / "analysis_report.html"
     summary.to_csv(summary_path, index=False, encoding="utf-8-sig")
-    html = _analysis_report_html(summary, result)
+    html = _analysis_report_html(summary, result, run_dir / "network.png")
     report_path.write_text(html, encoding="utf-8")
     return {"analysis_summary": summary_path, "analysis_report": report_path}
 
 
-def _analysis_report_html(summary: pd.DataFrame, result: dict[str, pd.DataFrame]) -> str:
+def _analysis_report_html(summary: pd.DataFrame, result: dict[str, pd.DataFrame], network_path: Path) -> str:
     values = dict(zip(summary["item"].astype(str), summary["value"].astype(str)))
+    network_image = b64encode(network_path.read_bytes()).decode("ascii")
     cards = [
         ("Top class", values.get("top_class", "")),
         ("Reference domain", values.get("reference_domain", "")),
-        ("Reference compound", f"{values.get('unknown_mode_reference', '')} ({values.get('unknown_mode_reference_similarity', '')})"),
-        ("Fragment groups", values.get("fragment_groups", "")),
+        ("Nearest reference", f"{values['best_compound']} ({values['best_similarity']})"),
+        ("Motifs scoring ≥ 0.50", values["motifs_at_or_above_0_50"]),
         ("Network edges", values.get("network_edges", "")),
         ("Class entries", values.get("class_candidates", "")),
     ]
@@ -241,14 +256,14 @@ img {{max-width: 100%; border: 1px solid #e2e8f0; border-radius: 8px;}}
 </head>
 <body>
 <h1>PodoNMR Analysis Report</h1>
-<div class="subtitle">Experimental 13C, HSQC and per-carbon C_type to class ranking, fragment groups, network context and reference compounds.</div>
+<p class="subtitle">Diterpene scaffold and motif candidates from assigned NMR shifts. Model scores are uncalibrated. Use the results to prioritize candidates for structural review.</p>
 <div class="cards">{card_html}</div>
 <h2>Sample Network</h2>
-<img src="network.png" alt="NMR sample network">
-<h2>Class Ranking</h2>
+<img src="data:image/png;base64,{network_image}" alt="Structural motif co-occurrence network">
+<h2>Scaffold Ranking</h2>
 {result["classes"].to_html(index=False, escape=True)}
-<h2>Fragment Groups</h2>
-{result["groups"].to_html(index=False, escape=True)}
+<h2>Structural Motif Scores</h2>
+{result["motif_scores"][MOTIF_COLUMNS].rename(columns=TABLE_LABELS).to_html(index=False, escape=True)}
 <h2>Network Edges</h2>
 {result["network_edges"].to_html(index=False, escape=True)}
 <h2>Similar Compounds</h2>
@@ -262,7 +277,7 @@ img {{max-width: 100%; border: 1px solid #e2e8f0; border-radius: 8px;}}
 def display_frame(data: pd.DataFrame, columns: list[str], height: int = 340) -> None:
     present = [column for column in columns if column in data.columns]
     frame = data[present] if present else data
-    st.dataframe(frame, height=height, width="stretch")
+    st.dataframe(frame, height=height, width="stretch", column_config=TABLE_LABELS)
 
 
 def class_probability_figure(classes: pd.DataFrame) -> go.Figure:
@@ -298,7 +313,7 @@ def node_score_figure(groups: pd.DataFrame) -> go.Figure:
             x=frame["group_probability"],
             y=frame["display_label"],
             orientation="h",
-            name="NMR evidence",
+            name="Motif model score",
             marker=dict(color="#2f6f73"),
         )
     )
@@ -315,7 +330,7 @@ def node_score_figure(groups: pd.DataFrame) -> go.Figure:
         barmode="group",
         height=max(480, 60*len(frame)+100),
         margin=dict(l=390, r=70, t=95, b=60),
-        xaxis=dict(title="score (not summed)", range=[0, 1.0]),
+        xaxis=dict(title="Score", rangemode="tozero"),
         yaxis=dict(title=""),
         plot_bgcolor="#ffffff",
         paper_bgcolor="#ffffff",
@@ -352,31 +367,18 @@ def network_figure(nodes: pd.DataFrame, edges: pd.DataFrame) -> go.Figure:
                 showlegend=False,
             )
         )
-    color_map = {
-        "stable": "#1f9d63",
-        "top8_unstable": "#e28b3c",
-        "low_support": "#f2c14e",
-        "rare_node": "#f2c14e",
-        "broad_skeleton": "#4e8fb8",
-        "default": "#8b95a1",
-    }
     node_x, node_y, node_text, node_size, node_color = [], [], [], [], []
-    max_score = max([float(data.get("final_score", 0.0) or 0.0) for _, data in graph.nodes(data=True)] or [1.0])
+    max_score = max(float(data["final_score"]) for _, data in graph.nodes(data=True)) or 1.0
     for node, data in graph.nodes(data=True):
-        flags = str(data.get("quality_flags", ""))
-        color = color_map["default"]
-        for key, value in color_map.items():
-            if key != "default" and key in flags:
-                color = value
-                break
-        score = float(data.get("final_score", 0.0) or 0.0)
+        score = float(data["final_score"])
         node_x.append(pos[node][0])
         node_y.append(pos[node][1])
         node_text.append(
-            f"<b>{fragment_label(node)}</b><br>model score={score:.3f}<br>{data.get('dominant_skeleton', '')}"
+            f"<b>{fragment_label(node)}</b><br>Motif score: {score:.3f}"
+            f"<br>Most common reference scaffold: {data['dominant_skeleton']}"
         )
         node_size.append(18 + 24 * score / max_score)
-        node_color.append(color)
+        node_color.append("#1a9850" if score >= 0.5 else "#8b95a1")
     fig.add_trace(
         go.Scatter(
             x=node_x,
@@ -411,11 +413,11 @@ with st.sidebar:
     input_source = st.radio(
         "Source",
         ["example", "upload"],
-        format_func=lambda value: "Example" if value == "example" else "Upload CSV",
+        format_func=lambda value: "Literature example" if value == "example" else "Upload CSV",
         horizontal=True,
     )
     uploaded = st.file_uploader("Upload sample table", type=["csv"], disabled=input_source == "example")
-    st.caption("Required columns: carbon_id, delta_C, delta_H, C_type. Leave delta_H blank for quaternary carbons.")
+    st.caption("Required CSV columns are carbon_id, delta_C, delta_H and C_type. Enter shifts in ppm and leave delta_H blank for carbons with no attached proton.")
 
 try:
     data = load_input(input_source, uploaded)
@@ -423,14 +425,8 @@ except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeError) as error:
     st.error(f"Could not read the CSV: {error}")
     st.stop()
 
-st.markdown('<div class="eyebrow">Diterpene fragment network</div>', unsafe_allow_html=True)
-st.title("PodoNMR · Multiscale 25%")
-st.markdown(
-    '<div class="lead">Experimental 13C, HSQC and per-carbon C_type are converted into a structural class ranking, fragment-group evidence, sample-specific network context and reference compounds.</div>',
-    unsafe_allow_html=True,
-)
-group_precision_5 = settings["precision_at_5"]
-group_precision_10 = settings["precision_at_10"]
+st.title("PodoNMR")
+st.write("Rank diterpene scaffolds and structural motifs from assigned ¹³C and ¹H chemical shifts and carbon types.")
 
 if data.empty:
     st.info("Upload a sample table to begin.")
@@ -441,12 +437,12 @@ if missing:
     st.error(f"Missing required columns: {', '.join(sorted(missing))}")
     st.stop()
 
-sid = sample_id(data)
+sid = "3-oxo-abieta-13-ene" if input_source == "example" else sample_id(data)
 input_cols = st.columns(4)
 input_cols[0].metric("Sample", sid)
-input_cols[1].metric("Rows", len(data))
-input_cols[2].metric("C types", data["C_type"].nunique(dropna=True))
-input_cols[3].metric("HSQC rows", data["delta_H"].notna().sum() if "delta_H" in data.columns else 0)
+input_cols[1].metric("Carbon sites", data["carbon_id"].nunique(dropna=True))
+input_cols[2].metric("Carbon types", data["C_type"].nunique(dropna=True))
+input_cols[3].metric("Assigned proton shifts", data["delta_H"].notna().sum())
 
 with st.expander("Input table", expanded=False):
     display_frame(data, ["carbon_id", "delta_C", "delta_H", "C_type", "mult", "J"], height=250)
@@ -468,24 +464,27 @@ result = analysis["result"]
 paths = analysis["paths"]
 classes = english_display(result["classes"])
 groups = english_display(result["groups"])
+motifs = result["motif_scores"]
 edges = english_display(result["network_edges"])
 similar = english_display(result["similar"])
 result_display = {
     "classes": classes,
-    "groups": groups,
+    "motif_scores": motifs,
     "network_edges": edges,
     "similar": similar,
-    "network_nodes": english_display(result.get("network_nodes", pd.DataFrame())),
 }
 
 top_class = classes.iloc[0]["skeleton_type"] if not classes.empty else ""
 best_compound = similar.iloc[0]["compound_id"] if not similar.empty else ""
 best_similarity = float(similar.iloc[0]["nmr_similarity"]) if not similar.empty else 0.0
-reference_similar = self_excluded_reference(similar)
-nearest_reference = reference_similar.iloc[0]["compound_id"] if not reference_similar.empty else best_compound
-nearest_reference_similarity = float(reference_similar.iloc[0]["nmr_similarity"]) if not reference_similar.empty else best_similarity
+reference_similar = distinct_descriptor_references(similar)
+nearest_reference = reference_similar.iloc[0]["compound_id"] if not reference_similar.empty else ""
+nearest_reference_similarity = float(reference_similar.iloc[0]["nmr_similarity"]) if not reference_similar.empty else None
 top_class_score = float(classes.iloc[0]["class_score"]) if not classes.empty else 0.0
-domain_status = domain_call(nearest_reference_similarity, top_class_score, thresholds)
+domain_status = (
+    domain_call(nearest_reference_similarity, top_class_score, thresholds)
+    if nearest_reference_similarity is not None else "insufficient reference support"
+)
 report_paths = write_run_report(
     analysis["run_dir"],
     result_display,
@@ -499,16 +498,16 @@ report_paths = write_run_report(
 )
 paths.update(report_paths)
 st.markdown(
-    f'<div class="callout"><b>Primary class:</b> {top_class} &nbsp; | &nbsp; '
+    f'<div class="callout"><b>Top scaffold:</b> {top_class} &nbsp; | &nbsp; '
     f'<b>Nearest reference:</b> {best_compound} ({best_similarity:.3f}) &nbsp; | &nbsp; '
     f'<b>Reference domain:</b> {domain_status}</div>',
     unsafe_allow_html=True,
 )
 
 summary = st.columns(5)
-summary[0].metric("Positive fragment nodes", len(groups))
+summary[0].metric("Motifs scoring ≥ 0.50", int(motifs["predicted_at_0_5"].sum()))
 summary[1].metric("Network edges", len(edges))
-summary[2].metric("Class entries", len(classes))
+summary[2].metric("Scaffold classes", len(classes))
 summary[3].metric("References", len(similar))
 summary[4].metric("Reference domain", domain_status)
 
@@ -517,14 +516,15 @@ tab_report, tab_network, tab_tables, tab_files = st.tabs(["Overview", "Network",
 with tab_report:
     left, right = st.columns([0.9, 1.1])
     with left:
-        st.subheader("Structural class ranking")
+        st.subheader("Scaffold ranking")
         st.plotly_chart(class_probability_figure(classes), width="stretch")
     with right:
-        st.subheader("Fragment-group evidence")
+        st.subheader("Top structural motifs")
+        if not groups["predicted_at_0_5"].any():
+            st.caption("All motif scores fall below 0.50. The chart shows the five highest scores.")
         st.plotly_chart(node_score_figure(groups), width="stretch")
-    st.caption("Fragment ranking uses the scores of the 28-target model. Network context shows fragment co-occurrence.")
-    st.caption(f"Grouped five-fold fragment recommendation: Precision@5 = {group_precision_5:.2%}; Precision@10 = {group_precision_10:.2%} (315 reference compounds, 28 targets).")
-    st.subheader("Reference support")
+    st.caption("Scaffold and motif scores are uncalibrated. Use these rankings to prioritize candidates for structural review. The network shows co-occurrence among known reference motifs.")
+    st.subheader("References with distinct NMR descriptors")
     display_frame(
         reference_similar,
         ["compound_id", "nmr_similarity", "nmr_distance", "compound_name", "skeleton_type", "source"],
@@ -541,10 +541,10 @@ with tab_network:
     )
 
 with tab_tables:
-    st.subheader("Structural class ranking")
+    st.subheader("Scaffold ranking")
     display_frame(
         classes,
-        ["class_rank", "skeleton_type", "class_probability", "class_score", "top_similar_compound_count", "best_nmr_similarity", "example_similar_compounds"],
+        ["class_rank", "skeleton_type", "class_score", "top_similar_compound_count", "best_nmr_similarity", "example_similar_compounds"],
         height=240,
     )
     st.subheader("Reference compounds")
@@ -553,18 +553,8 @@ with tab_tables:
         ["compound_id", "nmr_similarity", "nmr_distance", "compound_name", "skeleton_type", "source", "reference"],
         height=310,
     )
-    st.subheader("Self-excluded reference compounds")
-    display_frame(
-        reference_similar,
-        ["compound_id", "nmr_similarity", "nmr_distance", "compound_name", "skeleton_type", "source", "reference"],
-        height=260,
-    )
-    st.subheader("Fragment groups")
-    display_frame(
-        groups,
-        ["official_model_rank", "fragment_no", "fragment_name_en", "group_probability", "network_score", "quality_flags", "dominant_skeleton", "strongest_partners"],
-        height=310,
-    )
+    st.subheader("All 28 structural motif scores")
+    display_frame(motifs, MOTIF_COLUMNS, height=420)
 
 with tab_files:
     cols = st.columns(2)
@@ -583,9 +573,9 @@ with tab_files:
             mime="text/csv",
         )
 
-    # Download the original sample-specific artifacts generated by run_analysis.
     for key, label, filename, mimetype in [
-        ("groups", "Download fragment groups CSV", "group_recommendations.csv", "text/csv"),
+        ("motif_scores", "Download all motif scores CSV", "motif_scores.csv", "text/csv"),
+        ("groups", "Download displayed motifs CSV", "group_recommendations.csv", "text/csv"),
         ("similar", "Download similar compounds CSV", "similar_compounds.csv", "text/csv"),
         ("classes", "Download class ranking CSV", "class_recommendations.csv", "text/csv"),
         ("network_nodes", "Download network nodes CSV", "network_nodes.csv", "text/csv"),
@@ -600,4 +590,4 @@ with tab_files:
         for file in sorted(analysis["run_dir"].iterdir()):
             if file.is_file():
                 archive.write(file, arcname=file.name)
-    st.download_button("Download complete analysis ZIP", data=zip_buffer.getvalue(), file_name="PodoNMR_support25_analysis.zip", mime="application/zip")
+    st.download_button("Download all results (ZIP)", data=zip_buffer.getvalue(), file_name="PodoNMR-analysis.zip", mime="application/zip")

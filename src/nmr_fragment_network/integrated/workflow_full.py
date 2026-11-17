@@ -46,11 +46,16 @@ def validate_nmr_input(sample: pd.DataFrame) -> pd.DataFrame:
         if col not in sample.columns:
             raise ValueError(f'Required original NMR input column missing: {col}')
     df = sample.copy()
-    df['carbon_id'] = df.carbon_id.astype(str).str.strip()
-    if df.carbon_id.eq('').any() or df.carbon_id.str.lower().isin(['nan','none']).any():
+    if 'sample_id' in df and df.sample_id.dropna().astype(str).str.strip().nunique() > 1:
+        raise ValueError('Provide one sample per CSV file.')
+    df['carbon_id'] = df.carbon_id.astype('string').str.strip()
+    if df.carbon_id.isna().any() or df.carbon_id.str.lower().isin(['', 'nan', 'none']).any():
         raise ValueError('Empty carbon_id: distinct carbons require distinct IDs')
     df['delta_C'] = pd.to_numeric(df['delta_C'], errors='coerce')
+    proton_text = df['delta_H'].astype('string').str.strip()
     df['delta_H'] = pd.to_numeric(df['delta_H'], errors='coerce')
+    if (proton_text.notna() & proton_text.ne('') & df.delta_H.isna()).any():
+        raise ValueError('Enter a numeric 1H shift in ppm or leave the field blank.')
     if not np.isfinite(df.delta_C).all() or not df.delta_C.between(-20,300).all():
         raise ValueError('Invalid 13C shift')
     if df.delta_H.notna().any() and (not np.isfinite(df.delta_H.dropna()).all() or not df.delta_H.dropna().between(-1,15).all()):

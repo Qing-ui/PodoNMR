@@ -7,7 +7,7 @@ import pandas as pd
 from nmr_fragment_network.integrated.workflow_full import input_features, retrieval_indices, FULL_NMR_COLUMNS
 from nmr_fragment_network.network.nmr_observed import (
     _network_scores, build_nmr_sample_network, plot_nmr_sample_network,
-    _attach_class_similarity_support, _attach_group_quality,
+    _attach_class_similarity_support,
 )
 
 
@@ -29,7 +29,7 @@ def recommend_nmr_network(
 ) -> dict[str, pd.DataFrame]:
     data_dir = Path(data_dir)
     network_path = data_dir / 'ui_support25'
-    sample=pd.read_csv(input_csv)
+    sample = pd.read_csv(input_csv, dtype={'carbon_id': 'string', 'sample_id': 'string'})
     bundle=joblib.load(model_path)
     if bundle.get('version') != 'multiscale_support25_v1':
         raise ValueError('Expected only 25%-support multiscale integrated bundle')
@@ -63,11 +63,14 @@ def recommend_nmr_network(
     raw['final_score']=raw.group_probability
     groups=raw.loc[raw.predicted_at_0_5].head(top_groups).copy()
     if groups.empty:groups=raw.head(min(top_groups,5)).copy()
-    groups=_attach_group_quality(groups,network_path)
+    node_metadata = pd.read_csv(network_path / 'fragment_network_nodes.csv')
+    groups = groups.merge(node_metadata, on='group_id', how='left', validate='one_to_one')
     groups=groups.reset_index(drop=True)
     from nmr_fragment_network.fragment_names import fragment_name, fragment_code
-    groups['fragment_no']=groups.group_id.map(fragment_code)
-    groups['fragment_name_en']=groups.group_id.map(fragment_name)
+    raw['fragment_no'] = raw.group_id.map(fragment_code)
+    raw['fragment_name_en'] = raw.group_id.map(fragment_name)
+    groups['fragment_no'] = groups.group_id.map(fragment_code)
+    groups['fragment_name_en'] = groups.group_id.map(fragment_name)
 
     # Reproduce scaffold/reference retrieval, with the same fitted scaler and
     # 315-reference features retained from V4.6. No old fragment model runs.
@@ -98,7 +101,7 @@ def recommend_nmr_network(
             sample_network[key]['fragment_no']=sample_network[key].group_id.map(fragment_code)
             sample_network[key]['fragment_name_en']=sample_network[key].group_id.map(fragment_name)
     sample_id=str(sample['sample_id'].dropna().iloc[0]) if 'sample_id' in sample.columns and sample['sample_id'].notna().any() else 'unknown'
-    frames={'groups':groups,'similar':similar,'classes':classes,
+    frames={'groups':groups,'motif_scores':raw,'similar':similar,'classes':classes,
             'network_nodes':sample_network['nodes'],'network_edges':sample_network['edges']}
     for frame in frames.values():
         if not frame.empty:frame.insert(0,'sample_id',sample_id)
