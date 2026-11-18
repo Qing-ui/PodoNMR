@@ -83,17 +83,6 @@ def recommend_nmr_network(
     similar.insert(0,'rank',np.arange(1,len(similar)+1))
     similar['nmr_distance']=distances[0]
     similar['nmr_similarity']=1.0/(1.0+similar.nmr_distance)
-    # Reference labels derived from KNOWN structures for explanatory display only.
-    # Unknown prediction never sees structure identifiers or reference labels.
-    known=pd.read_csv(data_dir / 'reference_motifs.csv').set_index('compound_id')
-    predicted_ids=set(raw.loc[raw.predicted_at_0_5,'group_id'])
-    list_present=[];list_absent=[]
-    for compound_id in similar.compound_id.astype(str):
-        refmotifs=set(k for k in targets if k in known.columns and int(known.loc[compound_id,k])==1)
-        list_present.append(';'.join(sorted(refmotifs & predicted_ids)))
-        list_absent.append(';'.join(sorted(predicted_ids - refmotifs)))
-    similar['predicted_fragment_groups_present_in_reference']=list_present
-    similar['predicted_fragment_groups_absent_from_reference']=list_absent
     classes=_attach_class_similarity_support(classes,similar)
     sample_network=build_nmr_sample_network(groups,network_path)
     for key in ('nodes',):
