@@ -26,7 +26,6 @@ from nmr_fragment_network.fragment_names import fragment_name, fragment_label, f
 
 DATA = ROOT / "data"
 MODEL = ROOT / "data" / "support25" / "support25_integrated_model.joblib"
-EXAMPLE = ROOT / "external_case_3_oxo_abieta_13_ene" / "literature_assigned_13C_1H_pairs.csv"
 DISPLAY_SETTINGS = DATA / "display_settings.json"
 REQUIRED_COLUMNS = {"carbon_id", "delta_C", "delta_H", "C_type"}
 NODE_COUNT = 10
@@ -128,11 +127,10 @@ def english_display(frame: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def load_input(source: str, upload) -> pd.DataFrame:
-    selected = EXAMPLE if source == "example" else upload
-    if selected is None:
+def load_input(upload) -> pd.DataFrame:
+    if upload is None:
         return pd.DataFrame()
-    return pd.read_csv(selected, dtype={"carbon_id": "string", "sample_id": "string"})
+    return pd.read_csv(upload, dtype={"carbon_id": "string", "sample_id": "string"})
 
 
 def save_input(data: pd.DataFrame, run_dir: Path) -> Path:
@@ -410,17 +408,11 @@ thresholds = settings["reference_thresholds"]
 
 with st.sidebar:
     st.subheader("Sample")
-    input_source = st.radio(
-        "Source",
-        ["example", "upload"],
-        format_func=lambda value: "Literature example" if value == "example" else "Upload CSV",
-        horizontal=True,
-    )
-    uploaded = st.file_uploader("Upload sample table", type=["csv"], disabled=input_source == "example")
+    uploaded = st.file_uploader("Upload sample table", type=["csv"])
     st.caption("Required CSV columns are carbon_id, delta_C, delta_H and C_type. Enter shifts in ppm and leave delta_H blank for carbons with no attached proton.")
 
 try:
-    data = load_input(input_source, uploaded)
+    data = load_input(uploaded)
 except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeError) as error:
     st.error(f"Could not read the CSV: {error}")
     st.stop()
@@ -437,7 +429,7 @@ if missing:
     st.error(f"Missing required columns: {', '.join(sorted(missing))}")
     st.stop()
 
-sid = "3-oxo-abieta-13-ene" if input_source == "example" else sample_id(data)
+sid = sample_id(data)
 input_cols = st.columns(4)
 input_cols[0].metric("Sample", sid)
 input_cols[1].metric("Carbon sites", data["carbon_id"].nunique(dropna=True))

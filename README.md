@@ -26,9 +26,7 @@ Open [http://localhost:8501](http://localhost:8501).
 
 ## Analyze a sample
 
-Select **Literature example** and click **Run analysis** to reproduce the 3-oxo-abieta-13-ene case. The expected top scaffold is **Abietane** with a score of **0.8086**. Nine motifs score at least 0.50, and the nearest reference is `abietane_0089`. The example uses the published NMR assignments for compound 1. [Wang et al., *Journal of Asian Natural Products Research* 19 (2017), 448–456](https://doi.org/10.1080/10286020.2016.1232714).
-
-For your own measurements, select **Upload CSV**. Use one UTF-8 CSV file per sample. The [literature example CSV](external_case_3_oxo_abieta_13_ene/literature_assigned_13C_1H_pairs.csv) can serve as a template.
+Upload your assigned NMR measurements using **Upload sample table**, then click **Run analysis**. Use one UTF-8 CSV file per sample with the following columns.
 
 | Column | Required value |
 | --- | --- |
