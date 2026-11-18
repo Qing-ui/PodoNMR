@@ -33,9 +33,9 @@ Upload your assigned NMR measurements using **Upload sample table**, then click 
 | `carbon_id` | Identifier for each assigned carbon site. Repeat the identifier for a second proton attached to the same carbon. |
 | `delta_C` | Assigned ¹³C chemical shift in ppm. |
 | `delta_H` | Assigned shift in ppm of a directly attached ¹H. Leave blank for carbons without an attached proton. |
-| `C_type` | One of `CH3`, `CH2`, `CH`, `Cq`, `C=O`, `COOR`, or `CHO`. |
+| `C_type` | Accepted values are CH3, CH2, CH, Cq, C=O, COOR and CHO. |
 
-Provide at least eight distinct carbon sites and one assigned proton shift. Rows for the same carbon must agree on its ¹³C shift and carbon type. You can add a single `sample_id` value for labeling the results.
+Provide at least eight distinct carbon sites and one assigned proton shift. Rows for the same carbon must agree on its ¹³C shift and carbon type. You can label the results by adding a sample_id column with a single value.
 
 ## Interpret and export results
 
@@ -48,4 +48,4 @@ Scaffold and motif scores are uncalibrated. Use them to prioritize candidates fo
 
 ## Deploy
 
-On a Streamlit host, select Python 3.12 and set `app.py` as the entry point. Install dependencies from `requirements.txt`. The bundled fitted models, reference index, motif definitions, and network tables support inference and reference retrieval.
+On a Streamlit host, select Python 3.12 and set the entry point to app.py. Install dependencies from requirements.txt. The bundled fitted models, reference index, motif definitions, and network tables support inference and reference retrieval.
